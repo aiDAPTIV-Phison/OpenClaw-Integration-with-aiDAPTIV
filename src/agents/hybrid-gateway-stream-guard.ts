@@ -1,6 +1,6 @@
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { estimateTokens } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import {
   getHybridGatewayCloudFallback,
   getHybridGatewayCompactionReserveTokens,
