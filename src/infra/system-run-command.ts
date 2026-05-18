@@ -11,7 +11,7 @@ import {
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
 
-export type SystemRunCommandValidation =
+type SystemRunCommandValidation =
   | {
       ok: true;
       shellPayload: string | null;
@@ -24,7 +24,7 @@ export type SystemRunCommandValidation =
       details?: Record<string, unknown>;
     };
 
-export type ResolvedSystemRunCommand =
+type ResolvedSystemRunCommand =
   | {
       ok: true;
       argv: string[];
@@ -105,8 +105,15 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
   return wrapperArgv.slice(inlineCommandIndex + 1).some((entry) => entry.trim().length > 0);
 }
 
-function buildSystemRunCommandDisplay(argv: string[]): SystemRunCommandDisplay {
-  const shellWrapperResolution = extractShellWrapperCommand(argv);
+function buildSystemRunCommandDisplay(
+  argv: string[],
+  rawCommand: string | null,
+): SystemRunCommandDisplay {
+  const rawlessShellWrapperResolution = extractShellWrapperCommand(argv);
+  const shellWrapperResolution =
+    rawlessShellWrapperResolution.command === null && rawCommand !== null
+      ? extractShellWrapperCommand(argv, rawCommand)
+      : rawlessShellWrapperResolution;
   const shellPayload = shellWrapperResolution.command;
   const shellWrapperPositionalArgv = hasTrailingPositionalArgvAfterInlineCommand(argv);
   const envManipulationBeforeShellWrapper =
@@ -133,7 +140,7 @@ export function validateSystemRunCommandConsistency(params: {
   allowLegacyShellText?: boolean;
 }): SystemRunCommandValidation {
   const raw = normalizeRawCommandText(params.rawCommand);
-  const display = buildSystemRunCommandDisplay(params.argv);
+  const display = buildSystemRunCommandDisplay(params.argv, raw);
 
   if (raw) {
     const matchesCanonicalArgv = raw === display.commandText;
@@ -167,52 +174,23 @@ export function resolveSystemRunCommand(params: {
   command?: unknown;
   rawCommand?: unknown;
 }): ResolvedSystemRunCommand {
-  const raw = normalizeRawCommandText(params.rawCommand);
-  const command = Array.isArray(params.command) ? params.command : [];
-  if (command.length === 0) {
-    if (raw) {
-      return {
-        ok: false,
-        message: "rawCommand requires params.command",
-        details: { code: "MISSING_COMMAND" },
-      };
-    }
-    return {
-      ok: true,
-      argv: [],
-      commandText: "",
-      shellPayload: null,
-      previewText: null,
-    };
-  }
-
-  const argv = command.map((v) => String(v));
-  const validation = validateSystemRunCommandConsistency({
-    argv,
-    rawCommand: raw,
-    allowLegacyShellText: false,
-  });
-  if (!validation.ok) {
-    return {
-      ok: false,
-      message: validation.message,
-      details: validation.details ?? { code: "RAW_COMMAND_MISMATCH" },
-    };
-  }
-
-  return {
-    ok: true,
-    argv,
-    commandText: validation.commandText,
-    shellPayload: validation.shellPayload,
-    previewText: validation.previewText,
-  };
+  return resolveSystemRunCommandWithMode(params, false);
 }
 
 export function resolveSystemRunCommandRequest(params: {
   command?: unknown;
   rawCommand?: unknown;
 }): ResolvedSystemRunCommand {
+  return resolveSystemRunCommandWithMode(params, true);
+}
+
+function resolveSystemRunCommandWithMode(
+  params: {
+    command?: unknown;
+    rawCommand?: unknown;
+  },
+  allowLegacyShellText: boolean,
+): ResolvedSystemRunCommand {
   const raw = normalizeRawCommandText(params.rawCommand);
   const command = Array.isArray(params.command) ? params.command : [];
   if (command.length === 0) {
@@ -236,7 +214,7 @@ export function resolveSystemRunCommandRequest(params: {
   const validation = validateSystemRunCommandConsistency({
     argv,
     rawCommand: raw,
-    allowLegacyShellText: true,
+    allowLegacyShellText,
   });
   if (!validation.ok) {
     return {

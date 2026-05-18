@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
+  createSeededSandboxFsBridge,
   dockerExecResult,
   findCallsByScriptFragment,
   findCallByDockerArg,
@@ -14,6 +15,15 @@ import {
   mockedExecDockerRaw,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
+
+type DockerRawCall = NonNullable<ReturnType<typeof findCallByDockerArg>>;
+
+function requireDockerCall(call: DockerRawCall | undefined, label: string): DockerRawCall {
+  if (!call) {
+    throw new Error(`expected docker call for ${label}`);
+  }
+  return call;
+}
 
 describe("sandbox fs bridge anchored ops", () => {
   installFsBridgeTestHarness();
@@ -103,28 +113,17 @@ describe("sandbox fs bridge anchored ops", () => {
 
   it.each(pinnedCases)("$name", async (testCase) => {
     await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "from.txt"), "hello", "utf8");
-      await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
+      const { bridge } = await createSeededSandboxFsBridge(stateDir);
 
       await testCase.invoke(bridge);
 
       const opCall = mockedExecDockerRaw.mock.calls.find(
         ([args]) =>
           typeof args[5] === "string" &&
-          args[5].includes("python3 /dev/fd/3 \"$@\" 3<<'PY'") &&
+          args[5].includes('exec "$python_cmd" -c "$python_script" "$@"') &&
           getDockerArg(args, 1) === testCase.expectedArgs[0],
       );
-      expect(opCall).toBeDefined();
-      const args = opCall?.[0] ?? [];
+      const args = requireDockerCall(opCall, testCase.name)[0];
       testCase.expectedArgs.forEach((value, index) => {
         expect(getDockerArg(args, index + 1)).toBe(value);
       });
@@ -165,8 +164,7 @@ describe("sandbox fs bridge anchored ops", () => {
         await bridge.writeFile({ filePath: "alias/note.txt", data: "updated" });
 
         const writeCall = findCallByDockerArg(1, "write");
-        expect(writeCall).toBeDefined();
-        const args = writeCall?.[0] ?? [];
+        const args = requireDockerCall(writeCall, "write")[0];
         expect(getDockerArg(args, 2)).toBe("/workspace");
         expect(getDockerArg(args, 3)).toBe("real");
         expect(getDockerArg(args, 4)).toBe("note.txt");
@@ -196,8 +194,7 @@ describe("sandbox fs bridge anchored ops", () => {
       await bridge.stat({ filePath: "nested/file.txt" });
 
       const statCall = findCallByScriptFragment('stat -c "%F|%s|%Y" -- "$2"');
-      expect(statCall).toBeDefined();
-      const args = statCall?.[0] ?? [];
+      const args = requireDockerCall(statCall, "stat")[0];
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");
       expect(args).not.toContain("/workspace/nested/file.txt");

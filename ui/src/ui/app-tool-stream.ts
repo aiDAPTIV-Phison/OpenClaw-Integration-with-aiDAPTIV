@@ -1,5 +1,8 @@
-import { truncateText } from "./format.ts";
+import { createChatModelOverride } from "./chat-model-ref.ts";
+import type { ChatModelOverride } from "./chat-model-ref.types.ts";
+import { formatUnknownText, truncateText } from "./format.ts";
 import { resolveToolDisplay, formatToolDetail } from "./tool-display.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -37,6 +40,7 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  chatModelOverrides?: Record<string, ChatModelOverride | null>;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -55,7 +59,11 @@ function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const providerValue = toTrimmedString(provider);
   if (providerValue) {
     const prefix = `${providerValue}/`;
-    if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+    if (
+      normalizeLowercaseStringOrEmpty(modelValue).startsWith(
+        normalizeLowercaseStringOrEmpty(prefix),
+      )
+    ) {
       const trimmedModel = modelValue.slice(prefix.length).trim();
       if (trimmedModel) {
         return `${providerValue}/${trimmedModel}`;
@@ -162,8 +170,7 @@ function formatToolOutput(value: unknown): string | null {
     try {
       text = JSON.stringify(value, null, 2);
     } catch {
-      // oxlint-disable typescript/no-base-to-string
-      text = String(value);
+      text = formatUnknownText(value);
     }
   }
   const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
@@ -171,6 +178,47 @@ function formatToolOutput(value: unknown): string | null {
     return truncated.text;
   }
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function resolveSessionStatusModelOverride(result: unknown): ChatModelOverride | null | undefined {
+  const details = readRecord(readRecord(result)?.details);
+  if (!details || details.changedModel !== true) {
+    return undefined;
+  }
+  if (Object.hasOwn(details, "modelOverride")) {
+    const override = toTrimmedString(details.modelOverride);
+    return override ? createChatModelOverride(override) : null;
+  }
+  const model = toTrimmedString(details.model);
+  if (!model) {
+    return undefined;
+  }
+  const provider = toTrimmedString(details.modelProvider);
+  return createChatModelOverride(provider ? `${provider}/${model}` : model);
+}
+
+function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<string, unknown>) {
+  if (!host.chatModelOverrides) {
+    return;
+  }
+  const result = data.result;
+  const details = readRecord(readRecord(result)?.details);
+  const targetSessionKey = toTrimmedString(details?.sessionKey) ?? host.sessionKey;
+  if (targetSessionKey !== host.sessionKey) {
+    return;
+  }
+  const override = resolveSessionStatusModelOverride(result);
+  if (override === undefined) {
+    return;
+  }
+  host.chatModelOverrides = {
+    ...host.chatModelOverrides,
+    [targetSessionKey]: override,
+  };
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -248,11 +296,10 @@ export function resetToolStream(host: ToolStreamHost) {
 }
 
 export type CompactionStatus = {
-  active: boolean;
+  phase: "active" | "retrying" | "complete";
+  runId: string | null;
   startedAt: number | null;
   completedAt: number | null;
-  /** Set when compaction did not complete normally (e.g. wait timeout). */
-  error?: string;
 };
 
 export type FallbackStatus = {
@@ -273,85 +320,89 @@ type CompactionHost = ToolStreamHost & {
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
-const COMPACTION_ERROR_TOAST_DURATION_MS = 14_000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
-export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
-  const data = payload.data ?? {};
-  const phase = typeof data.phase === "string" ? data.phase : "";
-
-  // Clear any existing timer
+function clearCompactionTimer(host: CompactionHost) {
   if (host.compactionClearTimer != null) {
     window.clearTimeout(host.compactionClearTimer);
     host.compactionClearTimer = null;
   }
+}
+
+function scheduleCompactionClear(host: CompactionHost) {
+  host.compactionClearTimer = window.setTimeout(() => {
+    host.compactionStatus = null;
+    host.compactionClearTimer = null;
+  }, COMPACTION_TOAST_DURATION_MS);
+}
+
+function setCompactionComplete(host: CompactionHost, runId: string) {
+  host.compactionStatus = {
+    phase: "complete",
+    runId,
+    startedAt: host.compactionStatus?.startedAt ?? null,
+    completedAt: Date.now(),
+  };
+  scheduleCompactionClear(host);
+}
+
+export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  const completed = data.completed === true;
+
+  clearCompactionTimer(host);
 
   if (phase === "start") {
     host.compactionStatus = {
-      active: true,
+      phase: "active",
+      runId: payload.runId,
       startedAt: Date.now(),
       completedAt: null,
-      error: undefined,
     };
-  } else if (phase === "end") {
-    const willRetry = Boolean(data.willRetry);
-    if (willRetry) {
-      // Mid-flight: compaction finished but LLM will retry — keep "Compacting" until final end.
+    return;
+  }
+  if (phase === "end") {
+    if (data.willRetry === true && completed) {
+      // Compaction already succeeded, but the run is still retrying.
+      // Keep that distinct state until the matching lifecycle end arrives.
       host.compactionStatus = {
-        active: true,
+        phase: "retrying",
+        runId: payload.runId,
         startedAt: host.compactionStatus?.startedAt ?? Date.now(),
         completedAt: null,
-        error: undefined,
       };
       return;
     }
-    const timedOut = Boolean(data.timedOut);
-    if (timedOut) {
-      const msg =
-        typeof data.message === "string" && data.message.trim()
-          ? data.message.trim()
-          : "Compaction wait timed out; continuing with earlier context.";
-      host.compactionStatus = {
-        active: false,
-        startedAt: host.compactionStatus?.startedAt ?? null,
-        completedAt: Date.now(),
-        error: msg,
-      };
-      host.compactionClearTimer = window.setTimeout(() => {
-        host.compactionStatus = null;
-        host.compactionClearTimer = null;
-      }, COMPACTION_ERROR_TOAST_DURATION_MS);
+    if (completed) {
+      setCompactionComplete(host, payload.runId);
       return;
     }
-    host.compactionStatus = {
-      active: false,
-      startedAt: host.compactionStatus?.startedAt ?? null,
-      completedAt: Date.now(),
-      error: undefined,
-    };
-    // Auto-clear the toast after duration
-    host.compactionClearTimer = window.setTimeout(() => {
-      host.compactionStatus = null;
-      host.compactionClearTimer = null;
-    }, COMPACTION_TOAST_DURATION_MS);
-  } else if (phase === "timeout" || phase === "error") {
-    const msg =
-      typeof data.message === "string" && data.message.trim()
-        ? data.message.trim()
-        : phase === "timeout"
-          ? "Compaction wait timed out; continuing with earlier context."
-          : "Compaction failed.";
-    host.compactionStatus = {
-      active: false,
-      startedAt: host.compactionStatus?.startedAt ?? null,
-      completedAt: Date.now(),
-      error: msg,
-    };
-    host.compactionClearTimer = window.setTimeout(() => {
-      host.compactionStatus = null;
-      host.compactionClearTimer = null;
-    }, COMPACTION_ERROR_TOAST_DURATION_MS);
+    host.compactionStatus = null;
   }
+}
+
+function handleLifecycleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = toTrimmedString(data.phase);
+  if (phase !== "end" && phase !== "error") {
+    return;
+  }
+
+  // We scope lifecycle cleanup to the visible chat session first, then
+  // use runId only to match the specific compaction retry we started tracking.
+  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
+  if (!accepted.accepted) {
+    return;
+  }
+  if (host.compactionStatus?.phase !== "retrying") {
+    return;
+  }
+  if (host.compactionStatus.runId && host.compactionStatus.runId !== payload.runId) {
+    return;
+  }
+
+  setCompactionComplete(host, payload.runId);
 }
 
 function resolveAcceptedSession(
@@ -386,9 +437,6 @@ function resolveAcceptedSession(
  * use a different engine `runId` (e.g. hybrid gateway cloud continuation). `chat` events
  * can re-key via `handleChatEvent` — mirror that here so `agent` assistant/thinking
  * streams still update the live bubble.
- *
- * Some continuation paths omit `sessionKey` on agent payloads; only reject when it is
- * present and disagrees with the open chat session.
  */
 function tryReconcileAgentRunId(
   host: ToolStreamHost,
@@ -475,7 +523,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  // Handle compaction events (reconcile runId like assistant/thinking for hybrid-gateway continuation)
+  // Handle compaction events (reconcile runId for hybrid-gateway continuation)
   if (payload.stream === "compaction") {
     const sessionOk = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true })
       .accepted;
@@ -486,11 +534,17 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream === "lifecycle" || payload.stream === "fallback") {
+  if (payload.stream === "lifecycle") {
     const phase = toTrimmedString(payload.data?.phase);
     if (phase === "end" || phase === "error") {
       host.chatReasoningStream = null;
     }
+    handleLifecycleCompactionEvent(host as CompactionHost, payload);
+    handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
+  if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
     return;
   }
@@ -570,13 +624,22 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : phase === "result"
         ? formatToolOutput(data.result)
         : undefined;
+  if (name === "session_status" && phase === "result") {
+    syncSessionStatusModelOverride(host, data);
+  }
 
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
-    // above the tool card instead of below it.  Skip transient ⚙️ indicators.
-    if (host.chatStream && host.chatStream.trim().length > 0 && !host.chatStream.startsWith("\u2699")) {
+    // above the tool card instead of below it. Skip transient ⚙️ indicators.
+    if (
+      host.chatRunId &&
+      payload.runId === host.chatRunId &&
+      host.chatStream &&
+      host.chatStream.trim().length > 0 &&
+      !host.chatStream.startsWith("\u2699")
+    ) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
     }
     // Show a tool-calling indicator in the streaming bubble so the user

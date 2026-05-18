@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 export type CompactionTimeoutSignal = {
   isTimeout: boolean;
@@ -11,6 +11,24 @@ export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): bo
     return false;
   }
   return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
+}
+
+export function resolveRunTimeoutDuringCompaction(params: {
+  isCompactionPendingOrRetrying: boolean;
+  isCompactionInFlight: boolean;
+  graceAlreadyUsed: boolean;
+}): "extend" | "abort" {
+  if (!params.isCompactionPendingOrRetrying && !params.isCompactionInFlight) {
+    return "abort";
+  }
+  return params.graceAlreadyUsed ? "abort" : "extend";
+}
+
+export function resolveRunTimeoutWithCompactionGraceMs(params: {
+  runTimeoutMs: number;
+  compactionTimeoutMs: number;
+}): number {
+  return params.runTimeoutMs + params.compactionTimeoutMs;
 }
 
 export type SnapshotSelectionParams = {
