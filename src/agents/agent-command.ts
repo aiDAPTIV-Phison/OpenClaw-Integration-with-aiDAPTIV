@@ -1086,6 +1086,8 @@ async function agentCommandInternal(
               authProfileProvider: providerForAuthProfileValidation,
               sessionStore,
               storePath,
+              approximateContextTokens: sessionEntryForAttempt?.totalTokens,
+              contextTokensFresh: sessionEntryForAttempt?.totalTokensFresh,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),

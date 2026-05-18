@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../../src/agents/agent-paths.js";
+import { resolveOpenClawAgentDir } from "../../src/plugin-sdk/agent-dir-compat.js";
 import { resolveContextWindowInfo } from "../../src/agents/context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
 import {

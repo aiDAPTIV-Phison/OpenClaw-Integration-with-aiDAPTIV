@@ -28,6 +28,12 @@ type EmbeddedRunAttemptBase = Omit<
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
+  /**
+   * After hybrid-gateway payload guard fails on edge, run retries on cloud with
+   * {@link Agent#continue} instead of {@link AgentSession#prompt} so the session does not get a
+   * duplicate user message.
+   */
+  resumeAfterHybridGatewayPayloadEscalation?: boolean;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
