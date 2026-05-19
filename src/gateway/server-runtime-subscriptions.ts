@@ -19,7 +19,8 @@ export function startGatewayEventSubscriptions(params: {
     opts?: { dropIfSlow?: boolean },
   ) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
-  agentRunSeq: Map<string, number>;
+  /** Seq tracker for agent bus events only (must not share `agentRunSeq` used by chat broadcasts). */
+  agentBusSeq: Map<string, number>;
   chatRunState: ChatRunState;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
@@ -38,7 +39,7 @@ export function startGatewayEventSubscriptions(params: {
         broadcast: params.broadcast,
         broadcastToConnIds: params.broadcastToConnIds,
         nodeSendToSession: params.nodeSendToSession,
-        agentRunSeq: params.agentRunSeq,
+        agentBusSeq: params.agentBusSeq,
         chatRunState: params.chatRunState,
         resolveSessionKeyForRun,
         clearAgentRunContext,

@@ -326,7 +326,7 @@ function renderRoutingInfoBadge(routingInfo?: ChatRoutingInfo | null) {
   if (!routingInfo) return nothing;
   const isEdge = routingInfo.tier === "edge";
   const tierClass = isEdge ? "routing-tier--edge" : "routing-tier--cloud";
-  const label = isEdge ? "Edge" : "Cloud";
+  const label = routingInfo.label || (isEdge ? "Edge" : "Cloud");
   return html`
     <div class="chat-routing-info fade-in">
       <span class="routing-tier ${tierClass}">${label}</span>
@@ -367,17 +367,39 @@ export function renderReadingIndicatorGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  reasoningText?: string | null,
   routingInfo?: ChatRoutingInfo | null,
 ) {
+  const hasRouting = !!routingInfo?.model;
+  const tierLabel = routingInfo?.label || (routingInfo?.tier === "edge" ? "Edge" : "Cloud");
+  const tierClass = routingInfo?.tier === "edge" ? "status-tier--edge" : "status-tier--cloud";
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
-        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-          <span class="chat-reading-indicator__dots">
-            <span></span><span></span><span></span>
-          </span>
-        </div>
+        ${
+          reasoningText
+            ? html`
+              <div class="chat-bubble chat-reasoning-stream streaming fade-in">
+                <div class="chat-thinking">${unsafeHTML(
+                  toSanitizedMarkdownHtml(formatReasoningMarkdown(reasoningText)),
+                )}</div>
+              </div>
+            `
+            : html`
+              <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+                ${
+                  hasRouting
+                    ? html`<span class="chat-reading-indicator__status fade-in">
+                        Task dispatched to <strong class="${tierClass}">${tierLabel} model</strong>, please wait…
+                      </span>`
+                    : html`<span class="chat-reading-indicator__status fade-in">
+                        Dispatching task…
+                      </span>`
+                }
+              </div>
+            `
+        }
       </div>
     </div>
   `;
@@ -390,6 +412,7 @@ export function renderStreamingGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  reasoningText?: string | null,
   routingInfo?: ChatRoutingInfo | null,
 ) {
   const name = assistant?.name ?? "Assistant";
@@ -399,6 +422,17 @@ export function renderStreamingGroup(
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderRoutingInfoBadge(routingInfo)}
+        ${
+          reasoningText
+            ? html`
+              <div class="chat-bubble chat-reasoning-stream streaming fade-in">
+                <div class="chat-thinking">${unsafeHTML(
+                  toSanitizedMarkdownHtml(formatReasoningMarkdown(reasoningText)),
+                )}</div>
+              </div>
+            `
+            : nothing
+        }
         ${renderGroupedMessage(
           {
             role: "assistant",

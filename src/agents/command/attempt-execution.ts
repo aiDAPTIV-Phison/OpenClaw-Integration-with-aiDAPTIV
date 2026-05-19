@@ -380,6 +380,8 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  approximateContextTokens?: number;
+  contextTokensFresh?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
@@ -633,6 +635,8 @@ export function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    approximateContextTokens: params.approximateContextTokens,
+    contextTokensFresh: params.contextTokensFresh,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,

@@ -271,6 +271,8 @@ export type PendingOptimisticUserMerge = {
 export type ChatRoutingInfo = {
   tier: string;
   model: string;
+  /** Custom display label from routing.tierLabels config. Falls back to "Edge"/"Cloud" when absent. */
+  label?: string;
 };
 
 export type ChatState = {
@@ -304,6 +306,7 @@ export type ChatEventPayload = {
   reasoningText?: string;
   routingTier?: string;
   routingModel?: string;
+  routingLabel?: string;
 };
 
 const LAST_APPENDED_FINAL_TTL_MS = 15_000;
@@ -619,6 +622,12 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  // Reset per-turn streaming state so each new message starts fresh.
+  // Without these resets, the previous turn's routing badge and reasoning
+  // remain visible during the classifier phase of the next turn, preventing
+  // "Dispatching task…" from showing.
+  (state as ChatState).chatRoutingInfo = null;
+  (state as ChatState).chatReasoningStream = null;
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -748,6 +757,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       (state as ChatState).chatRoutingInfo = {
         tier: payload.routingTier,
         model: payload.routingModel,
+        ...(payload.routingLabel !== undefined && { label: payload.routingLabel }),
       };
     }
     return payload.state;
@@ -756,6 +766,14 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.state === "reasoning") {
     if (payload.reasoningText) {
       (state as ChatState).chatReasoningStream = payload.reasoningText;
+      // After a tool-call round-trip chatStream is null (cleared by the previous
+      // "final"), so build-chat-items never creates a reading-indicator and
+      // reasoning has no container to render into. Setting chatStream to "" here
+      // ensures the reading-indicator appears immediately when reasoning starts,
+      // even mid-run (e.g. after tool results are processed).
+      if (state.chatStream === null) {
+        state.chatStream = "";
+      }
     }
     return payload.state;
   }

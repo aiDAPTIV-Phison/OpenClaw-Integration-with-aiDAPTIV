@@ -469,8 +469,8 @@ export async function resolveReplyDirectives(params: {
     sessionReasoningLevel == null &&
     configuredReasoningDefault != null;
   let resolvedReasoningLevel: ReasoningLevel =
-    directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off";
-  if (reasoningUsesConfiguredDefault && !canUseReasoningState) {
+    opts?.reasoningLevel ?? directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off";
+  if (reasoningUsesConfiguredDefault && !canUseReasoningState && !opts?.reasoningLevel) {
     resolvedReasoningLevel = "off";
   }
   const resolvedElevatedLevel = elevatedAllowed

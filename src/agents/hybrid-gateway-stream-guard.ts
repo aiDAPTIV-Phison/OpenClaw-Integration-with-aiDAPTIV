@@ -80,26 +80,63 @@ export function resolvePayloadEscalationThreshold(edgeMax: number): {
  * token estimates but still consume context on the server).
  */
 export function estimateHybridGatewayOutboundTokens(context: unknown): number | undefined {
-  const ctx = context as { messages?: unknown; systemPrompt?: unknown; tools?: unknown };
+  const breakdown = estimateHybridGatewayOutboundTokensBreakdown(context);
+  return breakdown?.total;
+}
+
+/**
+ * Component-level breakdown for diagnostics: tells you whether the base cost is
+ * dominated by system prompt, tools schema, or accumulated message history.
+ */
+export function estimateHybridGatewayOutboundTokensBreakdown(context: unknown):
+  | {
+      total: number;
+      messages: number;
+      messageCount: number;
+      systemPrompt: number;
+      tools: number;
+      toolCount: number;
+    }
+  | undefined {
+  const ctx = context as {
+    messages?: unknown;
+    systemPrompt?: unknown;
+    tools?: unknown;
+  };
   const messages = ctx.messages;
   if (!Array.isArray(messages)) {
     return undefined;
   }
-  let total = 0;
+  let messagesTokens = 0;
   for (const m of messages) {
-    total += estimateTokens(m as AgentMessage);
+    messagesTokens += estimateTokens(m as AgentMessage);
   }
+  let systemPromptTokens = 0;
   if (typeof ctx.systemPrompt === "string" && ctx.systemPrompt.length > 0) {
-    total += Math.ceil(ctx.systemPrompt.length / 4);
+    systemPromptTokens = Math.ceil(ctx.systemPrompt.length / 4);
   }
+  let toolsTokens = 0;
+  let toolCount = 0;
   if (ctx.tools != null) {
     try {
-      total += Math.ceil(JSON.stringify(ctx.tools).length / 4);
+      toolsTokens = Math.ceil(JSON.stringify(ctx.tools).length / 4);
+      if (Array.isArray(ctx.tools)) {
+        toolCount = ctx.tools.length;
+      } else if (typeof ctx.tools === "object") {
+        toolCount = Object.keys(ctx.tools as Record<string, unknown>).length;
+      }
     } catch {
       /* ignore non-serializable tools */
     }
   }
-  return total;
+  return {
+    total: messagesTokens + systemPromptTokens + toolsTokens,
+    messages: messagesTokens,
+    messageCount: messages.length,
+    systemPrompt: systemPromptTokens,
+    tools: toolsTokens,
+    toolCount,
+  };
 }
 
 /**
@@ -134,12 +171,15 @@ export function wrapStreamFnHybridGatewayEdgePayloadGuard(params: {
       return inner(model, context, options);
     }
     let estimated: number;
+    let breakdown:
+      | ReturnType<typeof estimateHybridGatewayOutboundTokensBreakdown>
+      | undefined;
     try {
-      const est = estimateHybridGatewayOutboundTokens(context);
-      if (est == null) {
+      breakdown = estimateHybridGatewayOutboundTokensBreakdown(context);
+      if (breakdown == null) {
         return inner(model, context, options);
       }
-      estimated = est;
+      estimated = breakdown.total;
     } catch {
       return inner(model, context, options);
     }

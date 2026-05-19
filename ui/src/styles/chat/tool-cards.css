@@ -753,7 +753,7 @@
   align-items: center;
   gap: 6px;
   font-size: 0.95em;
-  color: var(--foreground, #e5e5e5);
+  color: var(--text);
   opacity: 0.85;
 }
 

@@ -5,6 +5,8 @@ type GatewayBroadcastStateVersion = {
 
 export type GatewayBroadcastOpts = {
   dropIfSlow?: boolean;
+  /** When true, bypass slow-client backpressure and deliver immediately. */
+  forceSend?: boolean;
   stateVersion?: GatewayBroadcastStateVersion;
 };
 

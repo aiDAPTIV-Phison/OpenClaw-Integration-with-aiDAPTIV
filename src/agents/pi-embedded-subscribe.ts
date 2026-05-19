@@ -185,6 +185,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
+    toolGeneratingIndices: new Set(),
+    toolGeneratingTokenCounts: new Map(),
+    toolGeneratingNames: new Map(),
   };
   const usageTotals = {
     input: 0,

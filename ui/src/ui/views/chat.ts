@@ -914,7 +914,7 @@ function renderStandaloneRoutingBanner(props: ChatProps) {
   if (!ri) return nothing;
   const isEdge = ri.tier === "edge";
   const tierClass = isEdge ? "routing-tier--edge" : "routing-tier--cloud";
-  const label = isEdge ? "Edge" : "Cloud";
+  const label = ri.label || (isEdge ? "Edge" : "Cloud");
   return html`
     <div class="chat-routing-info fade-in">
       <span class="routing-tier ${tierClass}">${label}</span>
@@ -1083,13 +1083,13 @@ export function renderChat(props: ChatProps) {
                   assistantIdentity,
                   props.basePath,
                   props.assistantAttachmentAuthToken ?? null,
+                  props.reasoningStream,
                   props.routingInfo,
                 )}
               `;
             }
             if (item.kind === "stream") {
               return html`
-                ${renderStandaloneRoutingBanner(props)}
                 ${renderStreamingGroup(
                   item.text,
                   item.startedAt,
@@ -1097,6 +1097,7 @@ export function renderChat(props: ChatProps) {
                   assistantIdentity,
                   props.basePath,
                   props.assistantAttachmentAuthToken ?? null,
+                  props.reasoningStream,
                   props.routingInfo,
                 )}
               `;
@@ -1363,7 +1364,7 @@ export function renderChat(props: ChatProps) {
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${!isBusy ? renderStandaloneRoutingBanner(props) : nothing}
+      ${!isBusy && !isEmpty ? renderStandaloneRoutingBanner(props) : nothing}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
         compactBusy,
         compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),

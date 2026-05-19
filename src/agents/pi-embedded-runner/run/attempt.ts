@@ -3108,7 +3108,7 @@ export async function runEmbeddedAttempt(
         if (params.resumeAfterHybridGatewayPayloadEscalation) {
           const stripped = stripTrailingHybridGatewayPayloadEscalationAssistant(activeSession.messages);
           if (stripped.length < activeSession.messages.length) {
-            activeSession.agent.replaceMessages(stripped);
+            activeSession.agent.state.messages = stripped;
           }
         }
         if (!isRawModelRun) {

@@ -1,4 +1,5 @@
 import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
+import type { ReasoningLevel } from "../thinking.shared.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -88,7 +89,7 @@ export function buildEmbeddedRunBaseParams(params: {
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
     verboseLevel: params.run.verboseLevel,
-    reasoningLevel: params.reasoningLevelOverride ?? params.run.reasoningLevel,
+    reasoningLevel: (params.reasoningLevelOverride ?? params.run.reasoningLevel) as ReasoningLevel | undefined,
     execOverrides: params.run.execOverrides,
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,

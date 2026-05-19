@@ -2478,6 +2478,8 @@ export function renderApp(state: AppViewState) {
                   streamSegments: state.chatStreamSegments,
                   stream: state.chatStream,
                   streamStartedAt: state.chatStreamStartedAt,
+                  reasoningStream: state.chatReasoningStream,
+                  routingInfo: state.chatRoutingInfo,
                   draft: state.chatMessage,
                   queue: state.chatQueue,
                   realtimeTalkActive: state.realtimeTalkActive,

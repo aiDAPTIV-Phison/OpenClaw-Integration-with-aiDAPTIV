@@ -126,6 +126,15 @@ export type HybridGatewayConfig = {
      * Defaults to `"cloud"`. Use `"classifier"`, `"edge"`, or `"cloud"` (legacy config may use `"gateway"` for the classifier slot).
      */
     newSessionTier?: Tier;
+    /**
+     * Custom display labels for each tier shown in the chat UI badge.
+     * When omitted, defaults to "Edge" for `classifier`/`edge` and "Cloud" for `cloud`.
+     */
+    tierLabels?: {
+      classifier?: string;
+      edge?: string;
+      cloud?: string;
+    };
   };
   models: {
     classifier: TierModelMapping;

@@ -4,6 +4,11 @@ import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type {
+  ChatRoutingInfo,
+  LastAppendedFinalMessage,
+  PendingOptimisticUserMerge,
+} from "./controllers/chat.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -96,6 +101,10 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatReasoningStream: string | null;
+  chatRoutingInfo: ChatRoutingInfo | null;
+  lastAppendedFinalMessage: LastAppendedFinalMessage | null;
+  pendingOptimisticUserMerge: PendingOptimisticUserMerge | null;
   chatSideResult: ChatSideResult | null;
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;

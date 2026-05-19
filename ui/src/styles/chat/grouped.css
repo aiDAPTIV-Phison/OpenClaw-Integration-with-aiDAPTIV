@@ -431,6 +431,7 @@ img.chat-avatar {
 /* ── Hybrid Gateway routing info badge ── */
 .chat-routing-info {
   display: inline-flex;
+  align-self: flex-start;
   align-items: center;
   gap: 6px;
   padding: 3px 8px 3px 3px;

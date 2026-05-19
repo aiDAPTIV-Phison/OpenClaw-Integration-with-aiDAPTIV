@@ -91,6 +91,7 @@ export async function startGatewayEarlyRuntime(params: {
   chatDeltaLastBroadcastLen: GatewayMaintenanceParams["chatDeltaLastBroadcastLen"];
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
+  agentBusSeq: GatewayMaintenanceParams["agentBusSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
   mediaCleanupTtlMs?: number;
   skillsRefreshDelayMs: number;
@@ -168,6 +169,7 @@ export async function startGatewayEarlyRuntime(params: {
         chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
+        agentBusSeq: params.agentBusSeq,
         nodeSendToSession: params.nodeSendToSession,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }

@@ -45,12 +45,14 @@ export function stripTrailingHybridGatewayPayloadEscalationAssistant(
 /**
  * Publishes a routing decision for the gateway WebChat handler (`consumeLastHybridGatewayDecision`).
  * Used when the embedded runner escalates to cloud mid-run (no second classifier pass).
+ * `label` is auto-resolved from tier labels set by the plugin if not provided explicitly.
  */
 export function publishHybridGatewayRoutingDecisionForUi(params: {
   tier: string;
   provider: string;
   model: string;
   reason?: string;
+  label?: string;
 }): void {
   const g = globalThis as Record<string, unknown>;
   g[HYBRID_GATEWAY_LAST_DECISION_UI_KEY] = {
@@ -58,8 +60,23 @@ export function publishHybridGatewayRoutingDecisionForUi(params: {
     provider: params.provider,
     model: params.model,
     reason: params.reason ?? "routing",
+    label: params.label ?? getHybridGatewayTierLabel(params.tier),
     ts: Date.now(),
   };
+}
+
+/** Custom display labels for each routing tier, set by the hybrid-gateway plugin on init. */
+export const HYBRID_GATEWAY_TIER_LABELS_KEY = "__hybridGatewayTierLabels";
+
+export function setHybridGatewayTierLabels(labels: Partial<Record<string, string>>): void {
+  (globalThis as Record<string, unknown>)[HYBRID_GATEWAY_TIER_LABELS_KEY] = { ...labels };
+}
+
+export function getHybridGatewayTierLabel(tier: string): string | undefined {
+  const map = (globalThis as Record<string, unknown>)[HYBRID_GATEWAY_TIER_LABELS_KEY];
+  if (!map || typeof map !== "object") return undefined;
+  const v = (map as Record<string, unknown>)[tier];
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
 /** Effective edge context budget (tokens) for per-request payload checks (tool loops). */

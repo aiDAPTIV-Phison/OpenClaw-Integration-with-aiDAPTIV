@@ -77,6 +77,11 @@ import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
+import type {
+  ChatRoutingInfo,
+  LastAppendedFinalMessage,
+  PendingOptimisticUserMerge,
+} from "./controllers/chat.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type {
@@ -211,6 +216,10 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatReasoningStream: string | null = null;
+  @state() chatRoutingInfo: ChatRoutingInfo | null = null;
+  @state() lastAppendedFinalMessage: LastAppendedFinalMessage | null = null;
+  @state() pendingOptimisticUserMerge: PendingOptimisticUserMerge | null = null;
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;

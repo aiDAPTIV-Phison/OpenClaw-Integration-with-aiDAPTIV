@@ -566,6 +566,7 @@ export function createEmbeddedRunAuthController(params: {
   return {
     advanceAuthProfile,
     initializeAuthProfile,
+    applyApiKeyInfo,
     maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer,
   };

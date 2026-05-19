@@ -112,6 +112,13 @@ export type EmbeddedPiSubscribeState = {
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
+
+  /** Content indices for tool calls currently being streamed. */
+  toolGeneratingIndices: Set<number>;
+  /** Per-index token count increments received while a tool call is streaming. */
+  toolGeneratingTokenCounts: Map<number, number>;
+  /** Tool name resolved at the start of each streaming tool call, keyed by content index. */
+  toolGeneratingNames: Map<number, string>;
 };
 
 export type EmbeddedPiSubscribeContext = {

@@ -1,6 +1,7 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
+import type { ReasoningLevel } from "./thinking.shared.js";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
@@ -60,6 +61,8 @@ export type GetReplyOptions = {
   heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
+  /** One-shot reasoning level override for this run; does not persist to the session. */
+  reasoningLevel?: ReasoningLevel;
   /** One-shot fast-mode override for this run; does not persist to the session. */
   fastModeOverride?: boolean;
   /** Controls bootstrap workspace context injection (default: full). */

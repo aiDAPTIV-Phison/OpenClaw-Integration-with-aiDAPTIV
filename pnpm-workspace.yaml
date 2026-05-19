@@ -27,7 +27,7 @@ minimumReleaseAgeExclude:
   - "yaml"
   - "@cloudflare/workers-types"
   - "@hono/node-server"
-  - "@mariozechner/*"
+  - "@earendil-works/*"
   - "@openclaw/fs-safe"
   - "@openai/codex"
   - "@openai/codex-*"
