@@ -420,6 +420,7 @@ const hybridGatewayPlugin = {
           contextTokensFresh: approxFresh,
           edgeMaxContextTokens: edgeMax,
         });
+      const tSetup = performance.now();
 
       // /new or /reset startup → force the configured tier for this request
       if (prompt?.includes("A new session was started via /new or /reset")) {
@@ -436,14 +437,22 @@ const hybridGatewayPlugin = {
         });
         return { providerOverride: target.provider, modelOverride: target.model };
       }
+      const tNewSessionCheck = performance.now();
 
       // Session estimate already at/above payload escalation threshold → cloud (skip classifier)
-      if (escalateContext()) {
+      const tEsc0 = performance.now();
+      const shouldEscalate = escalateContext();
+      const tEsc1 = performance.now();
+
+      if (shouldEscalate) {
         const cloud = config.models.cloud;
         const thr =
           edgeMax != null ? resolvePayloadEscalationThreshold(edgeMax).escalationThresholdTokens : undefined;
         log.info(
           `[hybrid-gw] force-cloud (edge payload escalation threshold) approxTokens=${approxTokens} edgeMax=${edgeMax} escalationThresholdTokens=${thr ?? "n/a"} reserve=${reserve} fresh=${approxFresh === undefined ? "n/a" : String(approxFresh)} -> ${cloud.provider}/${cloud.model}`,
+        );
+        log.info(
+          `[hybrid-gw] timing: setup=${(tSetup - t0).toFixed(3)}ms newSessionCheck=${(tNewSessionCheck - tSetup).toFixed(3)}ms escalate=${(tEsc1 - tEsc0).toFixed(3)}ms(result=true) total=${(tEsc1 - t0).toFixed(3)}ms`,
         );
         setLastDecision({
           tier: "cloud",
@@ -465,10 +474,11 @@ const hybridGatewayPlugin = {
           return undefined;
         }
       }
+      const tPreClassify = performance.now();
 
       try {
-        const t1 = performance.now();
         const classifyInput = extractUserText(prompt);
+        const tExtract = performance.now();
         const classifyResult = await classifier.classify(classifyInput);
         log.info(`[hybrid-gw] classify input (extracted): "${classifyInput.slice(0, 120)}${classifyInput.length > 120 ? "..." : ""}"`);
         const t2 = performance.now();
@@ -479,7 +489,7 @@ const hybridGatewayPlugin = {
           `[hybrid-gw] route: ${decision.tier} -> ${decision.provider}/${decision.model} | ${decision.reason}`,
         );
         log.info(
-          `[hybrid-gw] timing: classify=${(t2 - t1).toFixed(1)}ms route=${(t3 - t2).toFixed(1)}ms total=${(t3 - t0).toFixed(1)}ms`,
+          `[hybrid-gw] timing: setup=${(tSetup - t0).toFixed(3)}ms newSessionCheck=${(tNewSessionCheck - tSetup).toFixed(3)}ms escalate=${(tEsc1 - tEsc0).toFixed(3)}ms(result=false) bypass=${(tPreClassify - tEsc1).toFixed(3)}ms extract=${(tExtract - tPreClassify).toFixed(3)}ms classify=${(t2 - tExtract).toFixed(1)}ms route=${(t3 - t2).toFixed(3)}ms total=${(t3 - t0).toFixed(1)}ms`,
         );
 
         fileLog(

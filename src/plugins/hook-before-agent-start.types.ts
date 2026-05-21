@@ -9,6 +9,19 @@ export type PluginHookBeforeModelResolveEvent = {
   prompt: string;
   /** Attachment metadata for file-aware model routing. */
   attachments?: PluginHookBeforeModelResolveAttachment[];
+  /**
+   * Best-effort estimate of the current session/transcript token usage so
+   * routing plugins (e.g. hybrid-gateway) can escalate to a higher-context
+   * model when the conversation already approaches the edge limit. Optional;
+   * callers without a reliable estimate should omit it.
+   */
+  approximateContextTokens?: number;
+  /**
+   * Whether `approximateContextTokens` reflects the latest transcript on disk
+   * (true) or a possibly stale snapshot (false/undefined). Lets plugins apply
+   * a safety bump when the number cannot be fully trusted.
+   */
+  contextTokensFresh?: boolean;
 };
 
 export type PluginHookBeforeModelResolveResult = {
@@ -68,6 +81,10 @@ export type PluginHookBeforeAgentStartEvent = {
   runId?: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
+  /** See `PluginHookBeforeModelResolveEvent.approximateContextTokens`. */
+  approximateContextTokens?: number;
+  /** See `PluginHookBeforeModelResolveEvent.contextTokensFresh`. */
+  contextTokensFresh?: boolean;
 };
 
 /** @deprecated Use before_model_resolve and before_prompt_build result types. */
