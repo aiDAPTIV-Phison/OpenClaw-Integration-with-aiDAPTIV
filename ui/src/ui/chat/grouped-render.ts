@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../../../../src/agents/stream-message-shared.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { ChatRoutingInfo } from "../controllers/chat.ts";
@@ -1528,7 +1529,22 @@ function renderGroupedMessage(
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  // Phison hybrid-gateway: when an assistant turn fails (e.g. payload escalated
+  // to cloud, or cloud retry failed), the server stores the raw error in the
+  // peer `errorMessage` field and only puts a generic placeholder in `content`.
+  // Surface that detail as an inline callout so users see why the turn failed
+  // even when the global `lastError` was cleared by chat.history reload.
+  const rawErrorMessage = typeof m.errorMessage === "string" ? m.errorMessage.trim() : "";
+  const stopReason = typeof m.stopReason === "string" ? m.stopReason : "";
+  const inlineErrorMessage =
+    role === "assistant" && rawErrorMessage && stopReason === "error" ? rawErrorMessage : null;
+  const isHybridGatewayInlineError =
+    inlineErrorMessage !== null && inlineErrorMessage.startsWith("Hybrid gateway:");
+  // Hide the bare placeholder text when we render a richer error callout below.
+  const markdown =
+    inlineErrorMessage !== null && markdownBase?.trim() === STREAM_ERROR_FALLBACK_TEXT
+      ? null
+      : markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
@@ -1562,7 +1578,8 @@ function renderGroupedMessage(
     !hasImages &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
-    !normalizedMessage.replyTarget
+    !normalizedMessage.replyTarget &&
+    !inlineErrorMessage
   ) {
     return nothing;
   }
@@ -1724,6 +1741,15 @@ function renderGroupedMessage(
                     ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
                 : nothing}
+            ${inlineErrorMessage
+              ? html`<div
+                  class=${isHybridGatewayInlineError ? "callout info" : "callout danger"}
+                  role=${isHybridGatewayInlineError ? "status" : "alert"}
+                  style="margin-top: 8px;"
+                >
+                  ${inlineErrorMessage}
+                </div>`
+              : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
                   messageKey,

@@ -1661,7 +1661,7 @@ export function renderApp(state: AppViewState) {
                     `
                   : nothing}
                 ${state.lastError
-                  ? html`<div class="pill danger">${state.lastError}</div>`
+                  ? html`<div class=${state.lastError.includes("Hybrid gateway:") ? "pill info" : "pill danger"}>${state.lastError}</div>`
                   : nothing}
                 ${isChat ? renderChatControls(state) : nothing}
               </div>

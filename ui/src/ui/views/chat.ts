@@ -1283,24 +1283,26 @@ export function renderChat(props: ChatProps) {
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error
-        ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
-              ${props.onDismissError
-                ? html`
-                    <button
-                      class="callout__dismiss"
-                      type="button"
-                      @click=${props.onDismissError}
-                      aria-label="Dismiss error"
-                      title="Dismiss error"
-                    >
-                      ${icons.x}
-                    </button>
-                  `
-                : nothing}
-            </div>
-          `
+        ? props.error.includes("Hybrid gateway:")
+          ? html`<div class="callout info">${props.error}</div>`
+          : html`
+              <div class="callout danger callout--dismissible" role="alert">
+                <span class="callout__content">${props.error}</span>
+                ${props.onDismissError
+                  ? html`
+                      <button
+                        class="callout__dismiss"
+                        type="button"
+                        @click=${props.onDismissError}
+                        aria-label="Dismiss error"
+                        title="Dismiss error"
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `
         : nothing}
       ${props.focusMode
         ? html`
