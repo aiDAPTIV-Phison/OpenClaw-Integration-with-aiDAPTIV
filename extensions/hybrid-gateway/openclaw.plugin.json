@@ -66,6 +66,16 @@
             "type": "string",
             "enum": ["classifier", "edge", "cloud"],
             "description": "Tier to force when a /new or /reset session-startup prompt is detected. Defaults to \"cloud\"."
+          },
+          "tierLabels": {
+            "type": "object",
+            "properties": {
+              "classifier": { "type": "string", "description": "Display label for the classifier tier in the chat UI badge." },
+              "edge": { "type": "string", "description": "Display label for the edge tier in the chat UI badge." },
+              "cloud": { "type": "string", "description": "Display label for the cloud tier in the chat UI badge." }
+            },
+            "additionalProperties": false,
+            "description": "Custom display labels for each tier shown in the chat UI badge. Defaults to 'Edge' and 'Cloud'."
           }
         }
       },
