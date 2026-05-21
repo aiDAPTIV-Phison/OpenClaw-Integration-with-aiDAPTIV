@@ -606,8 +606,25 @@ function Convert-ConfigToJson {
     # under plugins.entries.hybrid-gateway.config.routing.skillRoutes[].
     # PowerShell's ConvertTo-Json defaults to depth 2 and silently
     # serialises deeper nodes as System.Object[] strings. Lock to 32.
+    #
+    # PS 5.1 ConvertTo-Json quirks we must fix:
+    #   1. Always uses 4-space indentation; normalize to 2-space to match
+    #      openclaw.json produced by Node.js JSON.stringify(obj, null, 2).
+    #   2. Uses ":  " (colon + 2 spaces) as separator; normalize to ": ".
     param([Parameter(Mandatory)] $Object)
-    return ($Object | ConvertTo-Json -Depth 32)
+    $raw = $Object | ConvertTo-Json -Depth 32
+    $fixed = $raw -split "`r?`n" | ForEach-Object {
+        $line  = $_
+        $depth = 0
+        # Count and strip leading groups of exactly 4 spaces
+        while ($line.Length -ge 4 -and $line.Substring(0, 4) -eq '    ') {
+            $line = $line.Substring(4)
+            $depth++
+        }
+        # Rebuild with 2-space indent and fix PS 5.1 double-space after colon
+        (('  ' * $depth) + $line) -replace '":  ', '": '
+    }
+    return $fixed -join "`n"
 }
 
 function Write-WindowsHostConfig {
@@ -684,6 +701,26 @@ function Push-WslGuestConfig {
     }
 }
 
+function New-GatewayToken {
+    # Generate a 48-char hex token (24 random bytes), matching what
+    # openclaw generates internally via crypto.randomBytes(24).toString('hex').
+    # Use RNGCryptoServiceProvider (available on .NET 4.x / PowerShell 5.1);
+    # RandomNumberGenerator.Fill() requires .NET 6+ and is not available here.
+    $bytes = [byte[]]::new(24)
+    $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
+function Set-GatewayAuthToken {
+    # Patch gateway.auth.token on a PSCustomObject in-place.
+    param(
+        [Parameter(Mandatory)] $Config,
+        [Parameter(Mandatory)] [string]$Token
+    )
+    Set-JsonProperty -Object $Config.gateway.auth -Name 'token' -Value $Token
+}
+
 function Apply-CloudProviderConfig {
     # Phase 2 entry point: call after provision.sh has succeeded (so
     # /home/openclaw/.openclaw/ exists and is owned by the openclaw
@@ -696,12 +733,24 @@ function Apply-CloudProviderConfig {
     $templatePath = Join-Path $AppDir "openclaw-template.json"
     $userProfile  = $env:USERPROFILE
 
+    # Pre-generate a stable gateway auth token at install time so the
+    # gateway never sees an empty token on first boot. The gateway's new
+    # default behaviour (persistStartupAuth=false) deliberately does NOT
+    # write a generated token back to openclaw.json -- so without this
+    # pre-seeding every restart would produce a different token, breaking
+    # the dashboard URL. We generate it here (Windows-side) and embed it
+    # directly into the config before writing to both the host and WSL.
+    $gatewayToken = New-GatewayToken
+    Write-Log "Generated gateway auth token ($($gatewayToken.Length) chars)"
+
     if ([string]::IsNullOrWhiteSpace($Options.ProviderApiKey)) {
         # No-key path: still ship a valid openclaw.json so the gateway
         # boots without errors; user can fill in the key later via the
-        # OpenClaw web UI. Use the template as-is (no patching).
-        Write-Log "No cloud apiKey provided; writing unpatched template to host + WSL"
-        $json = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+        # OpenClaw web UI. Use the template with only the token patched.
+        Write-Log "No cloud apiKey provided; writing token-only-patched template to host + WSL"
+        $cfg  = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Set-GatewayAuthToken -Config $cfg -Token $gatewayToken
+        $json = Convert-ConfigToJson -Object $cfg
         Write-WindowsHostConfig -Json $json -UserProfile $userProfile
         Push-WslGuestConfig    -Json $json -Distro $Distro
         return
@@ -713,8 +762,10 @@ function Apply-CloudProviderConfig {
     # writing a malformed openclaw.json that breaks gateway startup.
     $known = @('openrouter', 'google', 'anthropic', 'openai', 'together')
     if ($known -notcontains $Options.ProviderId) {
-        Write-Log "WARN: unknown provider id '$($Options.ProviderId)'; writing unpatched template"
-        $json = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+        Write-Log "WARN: unknown provider id '$($Options.ProviderId)'; writing token-only-patched template"
+        $cfg  = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Set-GatewayAuthToken -Config $cfg -Token $gatewayToken
+        $json = Convert-ConfigToJson -Object $cfg
         Write-WindowsHostConfig -Json $json -UserProfile $userProfile
         Push-WslGuestConfig    -Json $json -Distro $Distro
         return
@@ -722,6 +773,7 @@ function Apply-CloudProviderConfig {
 
     Write-Log "Patching openclaw.json for provider=$($Options.ProviderId), model=$($Options.ProviderModel)"
     $cfg  = Build-OpenClawConfig -TemplatePath $templatePath -Provider $Options
+    Set-GatewayAuthToken -Config $cfg -Token $gatewayToken
     $json = Convert-ConfigToJson -Object $cfg
     Write-WindowsHostConfig -Json $json -UserProfile $userProfile
     Push-WslGuestConfig    -Json $json -Distro $Distro
