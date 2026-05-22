@@ -690,52 +690,38 @@ function Write-WindowsHostConfig {
 }
 
 function Push-WslGuestConfig {
-    # The actual file the WSL gateway reads. Strategy: stage to
-    # %TEMP%\openclaw-config-<guid>.json, translate the path with
-    # `wslpath`, then `install` it as openclaw:openclaw mode 0640 in
-    # one atomic step (no race where the file briefly exists with
-    # wrong owner / mode). Failure is FATAL -- without this file the
-    # gateway will boot with no API key and any LLM call fails.
+    # The actual file the WSL gateway reads. Failure is FATAL -- without
+    # this file the gateway will boot with no API key and any LLM call fails.
+    #
+    # Strategy: base64-encode the JSON in PowerShell and pass it as a
+    # single shell argument, then decode inside WSL and write atomically
+    # via a root-owned temp file + mv. This avoids any dependency on
+    # /mnt/c (Windows drive mounts), which is absent in STRICT SANDBOX
+    # mode (windowsbridge=0). The /mnt/c strategy used previously failed
+    # in that mode with "cannot stat /mnt/c/...".
     param(
         [Parameter(Mandatory)] [string]$Json,
         [Parameter(Mandatory)] [string]$Distro
     )
-    $hostTmp = Join-Path $env:TEMP ("openclaw-config-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
-    try {
-        Set-Content -LiteralPath $hostTmp -Value $Json -Encoding UTF8 -NoNewline
+    # Base64-encode so the JSON (which may contain quotes, backslashes,
+    # newlines, API keys, etc.) can be passed safely as a single shell arg.
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Json))
 
-        # Translate C:\Users\...\AppData\Local\Temp\foo.json -> /mnt/c/...
-        # MANUALLY, NOT via `wsl.exe -- wslpath -u <path>`. The `--` form
-        # passes argv through the distro's default shell (bash), which
-        # treats backslashes as escape characters on UNQUOTED arguments
-        # -- so `\U`, `\A`, `\L`, `\T` (every initial of the segments
-        # in `\Users\AppData\Local\Temp`) get stripped before wslpath
-        # ever sees the path. Doing the translation in PowerShell means
-        # the command string we feed to bash contains forward slashes
-        # only, with nothing for bash to escape-process.
-        if ($hostTmp -notmatch '^[A-Za-z]:\\') {
-            throw "Unexpected temp path shape: $hostTmp"
-        }
-        $drive  = $hostTmp.Substring(0, 1).ToLower()
-        $wslSrc = '/mnt/' + $drive + ($hostTmp.Substring(2) -replace '\\', '/')
+    # Decode inside WSL, write to a root-owned temp, then atomically move
+    # into place with correct owner + mode in one operation.
+    $dest    = '/home/openclaw/.openclaw/openclaw.json'
+    $tmpDest = '/tmp/openclaw-config-stage.json'
+    $cmd     = "printf '%s' '$b64' | base64 -d > '$tmpDest' && " +
+               "install -m 0640 -o openclaw -g openclaw '$tmpDest' '$dest' && " +
+               "rm -f '$tmpDest'"
 
-        & wsl.exe -d $Distro -u root -- bash -c (
-            "install -m 0640 -o openclaw -g openclaw " +
-            "'$wslSrc' /home/openclaw/.openclaw/openclaw.json"
-        ) 2>&1 | Tee-Object -FilePath $LogFile -Append | Out-Null
+    & wsl.exe -d $Distro -u root -- bash -c $cmd 2>&1 |
+        Tee-Object -FilePath $LogFile -Append | Out-Null
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "wsl install command failed with exit $LASTEXITCODE"
-        }
-        Write-Log "Wrote WSL guest config: /home/openclaw/.openclaw/openclaw.json ($(($Json).Length) bytes, mode 0640, owner openclaw)"
-    } finally {
-        # Always wipe the host-side temp copy -- it briefly held the
-        # apiKey in plain text under %TEMP%, where corp DLP scanners
-        # love to find such strings.
-        if (Test-Path $hostTmp) {
-            Remove-Item -LiteralPath $hostTmp -Force -ErrorAction SilentlyContinue
-        }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Push-WslGuestConfig: wsl command failed with exit $LASTEXITCODE"
     }
+    Write-Log "Wrote WSL guest config: $dest ($($Json.Length) bytes, mode 0640, owner openclaw)"
 }
 
 function New-GatewayToken {
