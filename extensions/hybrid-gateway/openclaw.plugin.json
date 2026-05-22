@@ -1,5 +1,11 @@
 {
   "id": "hybrid-gateway",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": ["hook"]
+  },
+  "name": "Hybrid Gateway",
+  "description": "Routes requests between local (edge) and cloud models based on complexity classification.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

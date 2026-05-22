@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFile, type BoundaryFileOpenResult } from "../../infra/boundary-file-read.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
-import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
+import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+
+type BoundaryAllowedType = "file" | "directory";
 
 export type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
-  allowedType?: SafeOpenSyncAllowedType;
+  allowedType?: BoundaryAllowedType;
 };
 
 export type PathSafetyCheck = {
@@ -69,7 +70,7 @@ export class SandboxFsPathGuard {
 
   async openReadableFile(
     target: SandboxResolvedFsPath,
-  ): Promise<BoundaryFileOpenResult & { ok: true }> {
+  ): Promise<RootFileOpenResult & { ok: true }> {
     const opened = await this.openBoundaryWithinRequiredMount(target, "read files");
     if (!opened.ok) {
       throw opened.error instanceof Error
@@ -87,10 +88,30 @@ export class SandboxFsPathGuard {
     return lexicalMount;
   }
 
+  private finalizePinnedEntry(params: {
+    mount: SandboxFsMount;
+    parentPath: string;
+    basename: string;
+    targetPath: string;
+    action: string;
+  }): PinnedSandboxEntry {
+    const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
+    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
+      );
+    }
+    return {
+      mountRootPath: params.mount.containerRoot,
+      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
+      basename: params.basename,
+    };
+  }
+
   private async assertGuardedPathSafety(
     target: SandboxResolvedFsPath,
     options: PathSafetyOptions,
-    guarded: BoundaryFileOpenResult,
+    guarded: RootFileOpenResult,
   ) {
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
@@ -125,11 +146,11 @@ export class SandboxFsPathGuard {
     action: string,
     options?: {
       aliasPolicy?: PathAliasPolicy;
-      allowedType?: SafeOpenSyncAllowedType;
+      allowedType?: BoundaryAllowedType;
     },
-  ): Promise<BoundaryFileOpenResult> {
+  ): Promise<RootFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
-    const guarded = await openBoundaryFile({
+    const guarded = await openRootFile({
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
@@ -146,17 +167,13 @@ export class SandboxFsPathGuard {
     }
     const parentPath = normalizeContainerPath(path.posix.dirname(target.containerPath));
     const mount = this.resolveRequiredMount(parentPath, action);
-    const relativeParentPath = path.posix.relative(mount.containerRoot, parentPath);
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
-      );
-    }
-    return {
-      mountRootPath: mount.containerRoot,
-      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
+    return this.finalizePinnedEntry({
+      mount,
+      parentPath,
       basename,
-    };
+      targetPath: target.containerPath,
+      action,
+    });
   }
 
   async resolveAnchoredSandboxEntry(
@@ -185,20 +202,13 @@ export class SandboxFsPathGuard {
   ): Promise<PinnedSandboxEntry> {
     const anchoredTarget = await this.resolveAnchoredSandboxEntry(target, action);
     const mount = this.resolveRequiredMount(anchoredTarget.canonicalParentPath, action);
-    const relativeParentPath = path.posix.relative(
-      mount.containerRoot,
-      anchoredTarget.canonicalParentPath,
-    );
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
-      );
-    }
-    return {
-      mountRootPath: mount.containerRoot,
-      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
+    return this.finalizePinnedEntry({
+      mount,
+      parentPath: anchoredTarget.canonicalParentPath,
       basename: anchoredTarget.basename,
-    };
+      targetPath: target.containerPath,
+      action,
+    });
   }
 
   resolvePinnedDirectoryEntry(

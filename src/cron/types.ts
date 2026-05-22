@@ -1,5 +1,6 @@
-import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
@@ -13,10 +14,10 @@ export type CronSchedule =
       staggerMs?: number;
     };
 
-export type CronSessionTarget = "main" | "isolated";
+export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 export type CronWakeMode = "next-heartbeat" | "now";
 
-export type CronMessageChannel = ChannelId | "last";
+export type CronMessageChannel = ChannelId;
 
 export type CronDeliveryMode = "none" | "announce" | "webhook";
 
@@ -24,6 +25,8 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
+  /** Explicit thread/topic id for channels that support threaded delivery. */
+  threadId?: string | number;
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
@@ -43,6 +46,34 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
+export type CronDeliveryTraceTarget = {
+  channel?: string;
+  to?: string | null;
+  accountId?: string;
+  threadId?: string | number;
+  source?: "explicit" | "last";
+};
+
+export type CronDeliveryTraceMessageTarget = {
+  channel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+};
+
+export type CronDeliveryTrace = {
+  intended?: CronDeliveryTraceTarget;
+  resolved?: CronDeliveryTraceTarget & { ok: boolean; error?: string };
+  messageToolSentTo?: CronDeliveryTraceMessageTarget[];
+  fallbackUsed?: boolean;
+  delivered?: boolean;
+};
+
+export type CronDeliveryPreview = {
+  label: string;
+  detail: string;
+};
+
 export type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
@@ -57,6 +88,32 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
+
+export type CronRunDiagnosticSource =
+  | "cron-preflight"
+  | "cron-setup"
+  | "model-preflight"
+  | "agent-run"
+  | "tool"
+  | "exec"
+  | "delivery";
+
+export type CronRunDiagnostic = {
+  ts: number;
+  source: CronRunDiagnosticSource;
+  severity: CronRunDiagnosticSeverity;
+  message: string;
+  toolName?: string;
+  exitCode?: number | null;
+  truncated?: boolean;
+};
+
+export type CronRunDiagnostics = {
+  summary?: string;
+  entries: CronRunDiagnostic[];
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -65,6 +122,43 @@ export type CronRunOutcome = {
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  diagnostics?: CronRunDiagnostics;
+};
+
+export type CronAgentExecutionPhase =
+  | "runner_entered"
+  | "workspace"
+  | "runtime_plugins"
+  | "model_resolution"
+  | "auth"
+  | "context_engine"
+  | "attempt_dispatch"
+  | "context_assembled"
+  | "turn_accepted"
+  | "process_spawned"
+  | "tool_execution_started"
+  | "assistant_output_started"
+  | "model_call_started";
+
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  phase?: CronAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
+  firstModelCallStarted?: boolean;
+};
+
+export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
+  phase: CronAgentExecutionPhase;
 };
 
 export type CronFailureAlert = {
@@ -72,6 +166,8 @@ export type CronFailureAlert = {
   channel?: CronMessageChannel;
   to?: string;
   cooldownMs?: number;
+  /** When true, consecutive skipped runs count toward the alert threshold. */
+  includeSkipped?: boolean;
   /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
   mode?: "announce" | "webhook";
   /** Account ID for multi-account channel configurations. */
@@ -91,12 +187,12 @@ type CronAgentTurnPayloadFields = {
   thinking?: string;
   timeoutSeconds?: number;
   allowUnsafeExternalContent?: boolean;
+  /** Immutable external hook provenance for async dispatch. */
+  externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
-  deliver?: boolean;
-  channel?: CronMessageChannel;
-  to?: string;
-  bestEffortDeliver?: boolean;
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
 };
 
 type CronAgentTurnPayload = {
@@ -105,21 +201,27 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<CronAgentTurnPayloadFields>;
+} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+    toolsAllow?: string[] | null;
+  };
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  lastDiagnostics?: CronRunDiagnostics;
+  lastDiagnosticSummary?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Number of consecutive skipped executions (reset on success or error). */
+  consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */

@@ -1,13 +1,15 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
-  onboardCommand,
+  runCrestodian,
   runTui,
   runtime,
   setupCommand,
+  setupWizardCommand,
 } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
@@ -23,8 +25,6 @@ vi.mock("./config-cli.js", () => ({
   runConfigUnset: vi.fn(),
 }));
 
-const { buildProgram } = await import("./program.js");
-
 describe("cli program (smoke)", () => {
   let program = createProgram();
 
@@ -36,38 +36,47 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(argv, { from: "user" });
   }
 
-  beforeAll(() => {
-    program = createProgram();
-  });
-
   beforeEach(() => {
+    program = createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
+    runCrestodian.mockResolvedValue(undefined);
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("registers memory + status commands", () => {
+  it("registers message + status commands", () => {
     const names = program.commands.map((command) => command.name());
     expect(names).toContain("message");
-    expect(names).toContain("memory");
     expect(names).toContain("status");
   });
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
+    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBe(45000);
+  });
+
+  it("runs crestodian one-shot requests", async () => {
+    await runProgram(["crestodian", "--message", "status"]);
+    const options = runCrestodian.mock.calls.at(0)?.[0] as
+      | { message?: string; yes?: boolean; json?: boolean }
+      | undefined;
+    expect(options?.message).toBe("status");
+    expect(options?.yes).toBe(false);
+    expect(options?.json).toBe(false);
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
+    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBeUndefined();
   });
 
   it("runs setup wizard when wizard flags are present", async () => {
     await runProgram(["setup", "--remote-url", "ws://example"]);
 
     expect(setupCommand).not.toHaveBeenCalled();
-    expect(onboardCommand).toHaveBeenCalledTimes(1);
+    expect(setupWizardCommand).toHaveBeenCalledTimes(1);
   });
 });
