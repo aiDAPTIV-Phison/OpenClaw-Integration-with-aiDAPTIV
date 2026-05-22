@@ -113,17 +113,23 @@ powershell -NoProfile -Command "try { $c = New-Object System.Net.Sockets.TcpClie
 exit /b %errorlevel%
 
 :OPEN_DASHBOARD
-set "DASH_URL="
-for /f "usebackq delims=" %%U in (`wsl.exe -d %DISTRO% -u openclaw -e /opt/node/bin/node /opt/openclaw/openclaw.mjs dashboard --print-url 2^>nul`) do call :PICK_URL_LINE "%%U"
-if not defined DASH_URL set "DASH_URL=%FALLBACK_URL%"
-start "" "%DASH_URL%"
-goto :EOF
+REM Read the gateway auth token from the WSL config file (written at install
+REM time by post-install.ps1). The token is stable across restarts so we can
+REM embed it in the URL fragment for auto-authentication.
+REM
+REM NOTE: --print-url is not a valid openclaw dashboard flag; the correct
+REM approach is to read gateway.auth.token directly from openclaw.json and
+REM append it as a #token=<hex> URL fragment -- the same format that
+REM dashboard.ts produces when it calls openUrl(dashboardUrl).
+set "GATEWAY_TOKEN="
+for /f "usebackq" %%T in (`wsl.exe -d %DISTRO% -u openclaw -e /opt/node/bin/node -e "try{const c=JSON.parse(require('fs').readFileSync('/home/openclaw/.openclaw/openclaw.json','utf8'));const t=(c.gateway&&c.gateway.auth&&c.gateway.auth.token)||'';if(t)process.stdout.write(t+'\n')}catch(e){}" 2^>nul`) do set "GATEWAY_TOKEN=%%T"
 
-:PICK_URL_LINE
-REM Argument %1 is one line of dashboard --print-url output. Keep the
-REM last line that looks like an http(s):// URL.
-echo %~1 | findstr /r /c:"^https*://" >nul
-if not errorlevel 1 set "DASH_URL=%~1"
+REM Build the dashboard URL. Append #token=<hex> fragment when the token is
+REM available so the dashboard JS auto-authenticates without manual entry.
+REM The fragment is consumed client-side only and never sent to the server.
+set "DASH_URL=%FALLBACK_URL%"
+if defined GATEWAY_TOKEN set "DASH_URL=http://localhost:%GATEWAY_PORT%/#token=%GATEWAY_TOKEN%"
+start "" "%DASH_URL%"
 goto :EOF
 
 :MARKER_FAILED

@@ -601,13 +601,67 @@ function Build-OpenClawConfig {
     return $tpl
 }
 
+function ConvertTo-Json2 {
+    # Recursive JSON serialiser that always produces 2-space indentation,
+    # matching Node.js JSON.stringify(obj, null, 2). Required because PS 5.1
+    # ConvertTo-Json uses non-standard column-alignment (not a fixed N spaces
+    # per level), making post-processing normalisation unreliable.
+    param(
+        $Value,
+        [int]$Depth = 0
+    )
+    $pad      = '  ' * $Depth
+    $childPad = '  ' * ($Depth + 1)
+    $nl       = [System.Environment]::NewLine
+
+    if ($null -eq $Value) { return 'null' }
+
+    if ($Value -is [bool]) { return $Value.ToString().ToLower() }
+
+    if ($Value -is [int]     -or $Value -is [long]    -or
+        $Value -is [int16]   -or $Value -is [uint16]  -or
+        $Value -is [uint32]  -or $Value -is [uint64]  -or
+        $Value -is [double]  -or $Value -is [float]   -or
+        $Value -is [decimal]) {
+        return $Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    }
+
+    if ($Value -is [string]) {
+        $s = $Value -replace '\\', '\\' `
+                    -replace '"',  '\"' `
+                    -replace "`r", '\r' `
+                    -replace "`n", '\n' `
+                    -replace "`t", '\t'
+        return '"' + $s + '"'
+    }
+
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $items = @($Value | ForEach-Object { ConvertTo-Json2 -Value $_ -Depth ($Depth + 1) })
+        if ($items.Count -eq 0) { return '[]' }
+        return '[' + $nl + $childPad + ($items -join (',' + $nl + $childPad)) + $nl + $pad + ']'
+    }
+
+    if ($Value -is [PSCustomObject]) {
+        $props = @($Value.PSObject.Properties | Where-Object { $_.MemberType -eq 'NoteProperty' })
+        if ($props.Count -eq 0) { return '{}' }
+        $entries = $props | ForEach-Object {
+            $key = $_.Name -replace '\\', '\\' -replace '"', '\"'
+            $childPad + '"' + $key + '": ' + (ConvertTo-Json2 -Value $_.Value -Depth ($Depth + 1))
+        }
+        return '{' + $nl + ($entries -join (',' + $nl)) + $nl + $pad + '}'
+    }
+
+    # Fallback: treat as string
+    return '"' + ($Value.ToString() -replace '"', '\"') + '"'
+}
+
 function Convert-ConfigToJson {
-    # Centralise the depth setting -- openclaw.json nests up to ~6 levels
-    # under plugins.entries.hybrid-gateway.config.routing.skillRoutes[].
-    # PowerShell's ConvertTo-Json defaults to depth 2 and silently
-    # serialises deeper nodes as System.Object[] strings. Lock to 32.
+    # Serialise PSCustomObject to 2-space indented JSON using a custom
+    # recursive writer. PS 5.1 ConvertTo-Json uses non-standard
+    # column-alignment indentation that cannot be reliably normalised
+    # via post-processing, so we bypass it entirely.
     param([Parameter(Mandatory)] $Object)
-    return ($Object | ConvertTo-Json -Depth 32)
+    return ConvertTo-Json2 -Value $Object -Depth 0
 }
 
 function Write-WindowsHostConfig {
@@ -636,52 +690,58 @@ function Write-WindowsHostConfig {
 }
 
 function Push-WslGuestConfig {
-    # The actual file the WSL gateway reads. Strategy: stage to
-    # %TEMP%\openclaw-config-<guid>.json, translate the path with
-    # `wslpath`, then `install` it as openclaw:openclaw mode 0640 in
-    # one atomic step (no race where the file briefly exists with
-    # wrong owner / mode). Failure is FATAL -- without this file the
-    # gateway will boot with no API key and any LLM call fails.
+    # The actual file the WSL gateway reads. Failure is FATAL -- without
+    # this file the gateway will boot with no API key and any LLM call fails.
+    #
+    # Strategy: base64-encode the JSON in PowerShell and pass it as a
+    # single shell argument, then decode inside WSL and write atomically
+    # via a root-owned temp file + mv. This avoids any dependency on
+    # /mnt/c (Windows drive mounts), which is absent in STRICT SANDBOX
+    # mode (windowsbridge=0). The /mnt/c strategy used previously failed
+    # in that mode with "cannot stat /mnt/c/...".
     param(
         [Parameter(Mandatory)] [string]$Json,
         [Parameter(Mandatory)] [string]$Distro
     )
-    $hostTmp = Join-Path $env:TEMP ("openclaw-config-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
-    try {
-        Set-Content -LiteralPath $hostTmp -Value $Json -Encoding UTF8 -NoNewline
+    # Base64-encode so the JSON (which may contain quotes, backslashes,
+    # newlines, API keys, etc.) can be passed safely as a single shell arg.
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Json))
 
-        # Translate C:\Users\...\AppData\Local\Temp\foo.json -> /mnt/c/...
-        # MANUALLY, NOT via `wsl.exe -- wslpath -u <path>`. The `--` form
-        # passes argv through the distro's default shell (bash), which
-        # treats backslashes as escape characters on UNQUOTED arguments
-        # -- so `\U`, `\A`, `\L`, `\T` (every initial of the segments
-        # in `\Users\AppData\Local\Temp`) get stripped before wslpath
-        # ever sees the path. Doing the translation in PowerShell means
-        # the command string we feed to bash contains forward slashes
-        # only, with nothing for bash to escape-process.
-        if ($hostTmp -notmatch '^[A-Za-z]:\\') {
-            throw "Unexpected temp path shape: $hostTmp"
-        }
-        $drive  = $hostTmp.Substring(0, 1).ToLower()
-        $wslSrc = '/mnt/' + $drive + ($hostTmp.Substring(2) -replace '\\', '/')
+    # Decode inside WSL, write to a root-owned temp, then atomically move
+    # into place with correct owner + mode in one operation.
+    $dest    = '/home/openclaw/.openclaw/openclaw.json'
+    $tmpDest = '/tmp/openclaw-config-stage.json'
+    $cmd     = "printf '%s' '$b64' | base64 -d > '$tmpDest' && " +
+               "install -m 0640 -o openclaw -g openclaw '$tmpDest' '$dest' && " +
+               "rm -f '$tmpDest'"
 
-        & wsl.exe -d $Distro -u root -- bash -c (
-            "install -m 0640 -o openclaw -g openclaw " +
-            "'$wslSrc' /home/openclaw/.openclaw/openclaw.json"
-        ) 2>&1 | Tee-Object -FilePath $LogFile -Append | Out-Null
+    & wsl.exe -d $Distro -u root -- bash -c $cmd 2>&1 |
+        Tee-Object -FilePath $LogFile -Append | Out-Null
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "wsl install command failed with exit $LASTEXITCODE"
-        }
-        Write-Log "Wrote WSL guest config: /home/openclaw/.openclaw/openclaw.json ($(($Json).Length) bytes, mode 0640, owner openclaw)"
-    } finally {
-        # Always wipe the host-side temp copy -- it briefly held the
-        # apiKey in plain text under %TEMP%, where corp DLP scanners
-        # love to find such strings.
-        if (Test-Path $hostTmp) {
-            Remove-Item -LiteralPath $hostTmp -Force -ErrorAction SilentlyContinue
-        }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Push-WslGuestConfig: wsl command failed with exit $LASTEXITCODE"
     }
+    Write-Log "Wrote WSL guest config: $dest ($($Json.Length) bytes, mode 0640, owner openclaw)"
+}
+
+function New-GatewayToken {
+    # Generate a 48-char hex token (24 random bytes), matching what
+    # openclaw generates internally via crypto.randomBytes(24).toString('hex').
+    # Use RNGCryptoServiceProvider (available on .NET 4.x / PowerShell 5.1);
+    # RandomNumberGenerator.Fill() requires .NET 6+ and is not available here.
+    $bytes = [byte[]]::new(24)
+    $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
+function Set-GatewayAuthToken {
+    # Patch gateway.auth.token on a PSCustomObject in-place.
+    param(
+        [Parameter(Mandatory)] $Config,
+        [Parameter(Mandatory)] [string]$Token
+    )
+    Set-JsonProperty -Object $Config.gateway.auth -Name 'token' -Value $Token
 }
 
 function Apply-CloudProviderConfig {
@@ -696,12 +756,24 @@ function Apply-CloudProviderConfig {
     $templatePath = Join-Path $AppDir "openclaw-template.json"
     $userProfile  = $env:USERPROFILE
 
+    # Pre-generate a stable gateway auth token at install time so the
+    # gateway never sees an empty token on first boot. The gateway's new
+    # default behaviour (persistStartupAuth=false) deliberately does NOT
+    # write a generated token back to openclaw.json -- so without this
+    # pre-seeding every restart would produce a different token, breaking
+    # the dashboard URL. We generate it here (Windows-side) and embed it
+    # directly into the config before writing to both the host and WSL.
+    $gatewayToken = New-GatewayToken
+    Write-Log "Generated gateway auth token ($($gatewayToken.Length) chars)"
+
     if ([string]::IsNullOrWhiteSpace($Options.ProviderApiKey)) {
         # No-key path: still ship a valid openclaw.json so the gateway
         # boots without errors; user can fill in the key later via the
-        # OpenClaw web UI. Use the template as-is (no patching).
-        Write-Log "No cloud apiKey provided; writing unpatched template to host + WSL"
-        $json = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+        # OpenClaw web UI. Use the template with only the token patched.
+        Write-Log "No cloud apiKey provided; writing token-only-patched template to host + WSL"
+        $cfg  = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Set-GatewayAuthToken -Config $cfg -Token $gatewayToken
+        $json = Convert-ConfigToJson -Object $cfg
         Write-WindowsHostConfig -Json $json -UserProfile $userProfile
         Push-WslGuestConfig    -Json $json -Distro $Distro
         return
@@ -713,8 +785,10 @@ function Apply-CloudProviderConfig {
     # writing a malformed openclaw.json that breaks gateway startup.
     $known = @('openrouter', 'google', 'anthropic', 'openai', 'together')
     if ($known -notcontains $Options.ProviderId) {
-        Write-Log "WARN: unknown provider id '$($Options.ProviderId)'; writing unpatched template"
-        $json = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+        Write-Log "WARN: unknown provider id '$($Options.ProviderId)'; writing token-only-patched template"
+        $cfg  = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Set-GatewayAuthToken -Config $cfg -Token $gatewayToken
+        $json = Convert-ConfigToJson -Object $cfg
         Write-WindowsHostConfig -Json $json -UserProfile $userProfile
         Push-WslGuestConfig    -Json $json -Distro $Distro
         return
@@ -722,6 +796,7 @@ function Apply-CloudProviderConfig {
 
     Write-Log "Patching openclaw.json for provider=$($Options.ProviderId), model=$($Options.ProviderModel)"
     $cfg  = Build-OpenClawConfig -TemplatePath $templatePath -Provider $Options
+    Set-GatewayAuthToken -Config $cfg -Token $gatewayToken
     $json = Convert-ConfigToJson -Object $cfg
     Write-WindowsHostConfig -Json $json -UserProfile $userProfile
     Push-WslGuestConfig    -Json $json -Distro $Distro
