@@ -2915,20 +2915,19 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });
 
-      // Eagerly poll for hybrid-gateway routing decision so the UI badge
-      // appears right after classification finishes (~200-600ms), without
-      // waiting for the target model to establish its connection and start
-      // streaming (which can take seconds for cloud models).
+      // Poll for hybrid-gateway routing decisions throughout the run.
+      // The poll runs at 50ms so the initial edge badge appears quickly after
+      // classification (~200-600ms). It intentionally does NOT stop after the
+      // first broadcast so mid-run escalations (edge → cloud) are picked up
+      // and reflected in the UI badge promptly.
+      // Primary cleanup: the run's .finally() calls clearInterval.
+      // Safety cap: guards against orphaned timers if .finally() does not fire.
       const ROUTING_POLL_INTERVAL_MS = 50;
-      const ROUTING_POLL_MAX_MS = 10_000;
+      const ROUTING_POLL_SAFETY_CAP_MS = 60_000; // 1 minute
       const routingEarlyPollId = setInterval(() => {
-        if (lastBroadcastHybridGwRoutingKey !== undefined) {
-          clearInterval(routingEarlyPollId);
-          return;
-        }
         tryBroadcastRouting("early-poll");
       }, ROUTING_POLL_INTERVAL_MS);
-      setTimeout(() => clearInterval(routingEarlyPollId), ROUTING_POLL_MAX_MS);
+      setTimeout(() => clearInterval(routingEarlyPollId), ROUTING_POLL_SAFETY_CAP_MS);
     } catch (err) {
       context.chatAbortControllers.delete(clientRunId);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);
