@@ -601,30 +601,67 @@ function Build-OpenClawConfig {
     return $tpl
 }
 
-function Convert-ConfigToJson {
-    # Centralise the depth setting -- openclaw.json nests up to ~6 levels
-    # under plugins.entries.hybrid-gateway.config.routing.skillRoutes[].
-    # PowerShell's ConvertTo-Json defaults to depth 2 and silently
-    # serialises deeper nodes as System.Object[] strings. Lock to 32.
-    #
-    # PS 5.1 ConvertTo-Json quirks we must fix:
-    #   1. Always uses 4-space indentation; normalize to 2-space to match
-    #      openclaw.json produced by Node.js JSON.stringify(obj, null, 2).
-    #   2. Uses ":  " (colon + 2 spaces) as separator; normalize to ": ".
-    param([Parameter(Mandatory)] $Object)
-    $raw = $Object | ConvertTo-Json -Depth 32
-    $fixed = $raw -split "`r?`n" | ForEach-Object {
-        $line  = $_
-        $depth = 0
-        # Count and strip leading groups of exactly 4 spaces
-        while ($line.Length -ge 4 -and $line.Substring(0, 4) -eq '    ') {
-            $line = $line.Substring(4)
-            $depth++
-        }
-        # Rebuild with 2-space indent and fix PS 5.1 double-space after colon
-        (('  ' * $depth) + $line) -replace '":  ', '": '
+function ConvertTo-Json2 {
+    # Recursive JSON serialiser that always produces 2-space indentation,
+    # matching Node.js JSON.stringify(obj, null, 2). Required because PS 5.1
+    # ConvertTo-Json uses non-standard column-alignment (not a fixed N spaces
+    # per level), making post-processing normalisation unreliable.
+    param(
+        $Value,
+        [int]$Depth = 0
+    )
+    $pad      = '  ' * $Depth
+    $childPad = '  ' * ($Depth + 1)
+    $nl       = [System.Environment]::NewLine
+
+    if ($null -eq $Value) { return 'null' }
+
+    if ($Value -is [bool]) { return $Value.ToString().ToLower() }
+
+    if ($Value -is [int]     -or $Value -is [long]    -or
+        $Value -is [int16]   -or $Value -is [uint16]  -or
+        $Value -is [uint32]  -or $Value -is [uint64]  -or
+        $Value -is [double]  -or $Value -is [float]   -or
+        $Value -is [decimal]) {
+        return $Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)
     }
-    return $fixed -join "`n"
+
+    if ($Value -is [string]) {
+        $s = $Value -replace '\\', '\\' `
+                    -replace '"',  '\"' `
+                    -replace "`r", '\r' `
+                    -replace "`n", '\n' `
+                    -replace "`t", '\t'
+        return '"' + $s + '"'
+    }
+
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $items = @($Value | ForEach-Object { ConvertTo-Json2 -Value $_ -Depth ($Depth + 1) })
+        if ($items.Count -eq 0) { return '[]' }
+        return '[' + $nl + $childPad + ($items -join (',' + $nl + $childPad)) + $nl + $pad + ']'
+    }
+
+    if ($Value -is [PSCustomObject]) {
+        $props = @($Value.PSObject.Properties | Where-Object { $_.MemberType -eq 'NoteProperty' })
+        if ($props.Count -eq 0) { return '{}' }
+        $entries = $props | ForEach-Object {
+            $key = $_.Name -replace '\\', '\\' -replace '"', '\"'
+            $childPad + '"' + $key + '": ' + (ConvertTo-Json2 -Value $_.Value -Depth ($Depth + 1))
+        }
+        return '{' + $nl + ($entries -join (',' + $nl)) + $nl + $pad + '}'
+    }
+
+    # Fallback: treat as string
+    return '"' + ($Value.ToString() -replace '"', '\"') + '"'
+}
+
+function Convert-ConfigToJson {
+    # Serialise PSCustomObject to 2-space indented JSON using a custom
+    # recursive writer. PS 5.1 ConvertTo-Json uses non-standard
+    # column-alignment indentation that cannot be reliably normalised
+    # via post-processing, so we bypass it entirely.
+    param([Parameter(Mandatory)] $Object)
+    return ConvertTo-Json2 -Value $Object -Depth 0
 }
 
 function Write-WindowsHostConfig {
