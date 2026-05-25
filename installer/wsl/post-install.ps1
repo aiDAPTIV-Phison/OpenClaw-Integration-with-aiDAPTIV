@@ -74,6 +74,51 @@ function Write-Log {
     try { Add-Content -Path $LogFile -Value $line } catch { }
 }
 
+function Export-PhisonSslInspectionCa {
+    <#
+    .SYNOPSIS
+        Export the Phison corporate SSL inspection root CA from the Windows
+        trust store so WSL/Node.js can verify HTTPS on the Phison intranet.
+
+    .DESCRIPTION
+        Windows receives phison-new via Group Policy, but WSL Linux does not
+        inherit that trust and Node.js ignores the Linux system CA store
+        unless NODE_EXTRA_CA_CERTS is set. We export the cert here during
+        Phase 2 staging and let provision.sh install it into the distro.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath
+    )
+
+    $cert = Get-ChildItem -Path Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
+        Where-Object { $_.Subject -match 'CN=phison-new' } |
+        Select-Object -First 1
+
+    if (-not $cert) {
+        Write-Log "Phison SSL inspection CA (CN=phison-new) not found in LocalMachine\Root; provision.sh will probe during install"
+        return $false
+    }
+
+    $base64 = [Convert]::ToBase64String(
+        $cert.RawData,
+        [System.Base64FormattingOptions]::InsertLineBreaks
+    )
+    $pem = "-----BEGIN CERTIFICATE-----`n$base64`n-----END CERTIFICATE-----`n"
+
+    $dir = Split-Path -Parent $DestinationPath
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText(
+        $DestinationPath,
+        $pem,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Write-Log "Exported Phison SSL inspection CA ($($cert.Subject)) -> $DestinationPath"
+    return $true
+}
+
 function Invoke-NativeNoThrow {
     # Run a script block with $ErrorActionPreference temporarily set to
     # 'Continue'. Required for any native-command call that uses `2>&1 | ...`
@@ -1197,6 +1242,18 @@ sed -i '1i# MODE: STRICT SANDBOX (windowsbridge=0 at install time -- no /mnt/c, 
     if ($LASTEXITCODE -ne 0) { Show-FatalDialog "Distro staging failed" "cp provision.sh failed."; Unregister-Phase2RunOnce; exit 1 }
     & wsl.exe -d $DistroName -u root -- cp $srcP /tmp/openclaw-source.tar.gz
     if ($LASTEXITCODE -ne 0) { Show-FatalDialog "Distro staging failed" "cp openclaw-source.tar.gz failed."; Unregister-Phase2RunOnce; exit 1 }
+
+    # Phison intranet SSL inspection: export the Windows-trusted phison-new
+    # root CA into the distro so provision.sh can install it for both the
+    # Linux system store (curl/python) and Node.js (NODE_EXTRA_CA_CERTS).
+    $phisonCaStaging = Join-Path $env:TEMP "phison-hybrid-openclaw-phison-new.crt"
+    if (Export-PhisonSslInspectionCa -DestinationPath $phisonCaStaging) {
+        $phisonCaP = (& wsl.exe -d $DistroName -u root -- wslpath -u "$phisonCaStaging").Trim()
+        & wsl.exe -d $DistroName -u root -- cp $phisonCaP /tmp/rootfs-config/phison-new.crt
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "WARN: failed to stage phison-new.crt into distro (non-fatal; provision.sh may probe)"
+        }
+    }
 
     # provision.sh / wsl.conf / openclaw-gateway.service are committed to
     # the repo with LF-only line endings (.gitattributes enforces eol=lf)

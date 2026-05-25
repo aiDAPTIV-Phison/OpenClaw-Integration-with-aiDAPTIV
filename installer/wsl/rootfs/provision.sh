@@ -32,11 +32,52 @@ log() { printf '[provision] %s\n' "$*"; }
 log "[1/8] Installing base packages..."
 apt-get update
 apt-get install -y --no-install-recommends \
-    ca-certificates curl gnupg git python3 build-essential \
+    ca-certificates curl gnupg git openssl python3 build-essential \
     dbus systemd systemd-sysv \
     sudo locales tzdata
 locale-gen en_US.UTF-8
 rm -rf /var/lib/apt/lists/*
+
+# 1.5 Phison corporate SSL inspection CA.
+#
+# Phison intranet HTTPS is re-signed by an internal root CA (phison-new).
+# Windows trusts it via Group Policy, but WSL does not inherit that store
+# and Node.js ignores Linux ca-certificates unless NODE_EXTRA_CA_CERTS is
+# set. post-install.ps1 exports the Windows-trusted cert when available;
+# otherwise probe api.search.brave.com and install only if the chain shows
+# phison-new (so home/off-network installs stay untouched).
+PHISON_CA="/usr/local/share/ca-certificates/phison-new.crt"
+install_phison_ssl_inspection_ca() {
+    if [ -f "${PHISON_CA}" ]; then
+        log "[1.5/8] Phison SSL inspection CA already installed"
+        return 0
+    fi
+    if [ -f /tmp/rootfs-config/phison-new.crt ]; then
+        install -m 0644 /tmp/rootfs-config/phison-new.crt "${PHISON_CA}"
+        update-ca-certificates
+        log "[1.5/8] Installed Phison SSL inspection CA from Windows trust store export"
+        return 0
+    fi
+    local extracted
+    extracted="$(mktemp)"
+    if echo | openssl s_client -connect api.search.brave.com:443 \
+        -servername api.search.brave.com -showcerts 2>/dev/null \
+        | awk '/-----BEGIN CERTIFICATE-----/{n++} n==2{p=1} p{print} /-----END CERTIFICATE-----/ && n==2{exit}' \
+        > "${extracted}" \
+        && [ -s "${extracted}" ] \
+        && openssl x509 -in "${extracted}" -noout -issuer 2>/dev/null \
+            | grep -qi 'phison-new'; then
+        install -m 0644 "${extracted}" "${PHISON_CA}"
+        update-ca-certificates
+        rm -f "${extracted}"
+        log "[1.5/8] Installed Phison SSL inspection CA from HTTPS probe"
+        return 0
+    fi
+    rm -f "${extracted}"
+    log "[1.5/8] Phison SSL inspection CA not installed (not on Phison intranet)"
+    return 1
+}
+install_phison_ssl_inspection_ca || true
 
 # 2. Node.js 22 LTS. Use the official binary tarball rather than NodeSource
 #    so we don't pull in another apt repo + GPG key.
@@ -164,6 +205,25 @@ install -m 0644 /tmp/rootfs-config/openclaw-gateway.service \
 # no-op, so this is idempotent.
 systemctl disable openclaw-gateway.service 2>/dev/null || true
 
+# Node.js TLS env helper. Sourced by run-gateway.sh and the openclaw CLI
+# wrapper so every node invocation trusts the Phison SSL inspection CA when
+# it was installed in step 1.5 above.
+cat > /opt/openclaw/node-ca-env.sh <<'NODE_CA_EOF'
+#!/usr/bin/env bash
+# Node.js ships its own Mozilla CA bundle and does not read Linux
+# /etc/ssl/certs unless NODE_EXTRA_CA_CERTS is set.
+PHISON_CA="/usr/local/share/ca-certificates/phison-new.crt"
+if [ -f "${PHISON_CA}" ]; then
+  export NODE_EXTRA_CA_CERTS="${PHISON_CA}"
+fi
+NODE_CA_EOF
+chmod 0644 /opt/openclaw/node-ca-env.sh
+
+if [ -f "${PHISON_CA}" ] && ! grep -q 'NODE_EXTRA_CA_CERTS' /etc/systemd/system/openclaw-gateway.service; then
+    sed -i '/^\[Service\]/a Environment=NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/phison-new.crt' \
+        /etc/systemd/system/openclaw-gateway.service
+fi
+
 # Foreground launcher wrapper. The Windows-side openclaw-launcher.cmd
 # spawns this via `wsl.exe -d phison-hybrid-openclaw -u openclaw -- /opt/openclaw/
 # run-gateway.sh` inside a Windows Terminal tab, so the user sees stdout
@@ -192,6 +252,8 @@ case "${mode_line}" in
 esac
 echo ""
 cd "${HOME}"
+# shellcheck source=/dev/null
+. /opt/openclaw/node-ca-env.sh
 # `--force` makes the gateway take over port 18789 if a stale listener
 # still holds it (e.g. previous wsl session was killed without graceful
 # shutdown). `--bind loopback` binds 127.0.0.1 + ::1 only, never the
@@ -228,6 +290,8 @@ install -m 0755 /dev/stdin /usr/local/bin/openclaw <<'CLI_EOF'
 # full `/opt/node/bin/node /opt/openclaw/openclaw.mjs ...` path.
 # Mirrors the global `openclaw` shim that `pnpm link --global` would
 # install on a native build.
+# shellcheck source=/dev/null
+. /opt/openclaw/node-ca-env.sh
 exec /opt/node/bin/node /opt/openclaw/openclaw.mjs "$@"
 CLI_EOF
 
