@@ -590,6 +590,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     const now = Date.now();
     if (host.chatStream && host.chatStream.trim().length > 0 && !host.chatStream.startsWith("\u2699")) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      // Reasoning belongs to the live stream only; clear it when committing a segment
+      // so the frozen segment doesn't carry the global reasoning bubble forward.
+      host.chatReasoningStream = null;
     }
     host.chatStream = genTokens > 0
       ? `\u2699\uFE0F ${display.label}... (${genTokens} tokens)`
@@ -641,6 +644,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       !host.chatStream.startsWith("\u2699")
     ) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      // Reasoning belongs to the live stream only; clear it when committing a segment
+      // so the frozen segment doesn't carry the global reasoning bubble forward.
+      host.chatReasoningStream = null;
     }
     // Show a tool-calling indicator in the streaming bubble so the user
     // can see which tool the model is invoking, even without thinking mode.
