@@ -977,6 +977,19 @@ export function renderChat(props: ChatProps) {
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
   });
+  // Reasoning should only appear on the single live stream bubble.
+  // Find the key of the last stream/reading-indicator so we can gate
+  // reasoningStream to that item only, preventing duplicate bubbles
+  // when there are frozen stream segments from prior tool calls.
+  const lastLiveStreamKey = (() => {
+    for (let i = chatItems.length - 1; i >= 0; i--) {
+      const ci = chatItems[i];
+      if (ci.kind === "stream" || ci.kind === "reading-indicator") {
+        return ci.key;
+      }
+    }
+    return null;
+  })();
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const toggleToolCardExpanded = (toolCardId: string) => {
@@ -1083,7 +1096,7 @@ export function renderChat(props: ChatProps) {
                   assistantIdentity,
                   props.basePath,
                   props.assistantAttachmentAuthToken ?? null,
-                  props.reasoningStream,
+                  item.key === lastLiveStreamKey ? props.reasoningStream : null,
                   props.routingInfo,
                 )}
               `;
@@ -1097,7 +1110,7 @@ export function renderChat(props: ChatProps) {
                   assistantIdentity,
                   props.basePath,
                   props.assistantAttachmentAuthToken ?? null,
-                  props.reasoningStream,
+                  null,
                   props.routingInfo,
                 )}
               `;

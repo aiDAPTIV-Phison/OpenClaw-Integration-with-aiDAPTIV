@@ -545,7 +545,10 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               duplicateCount: item.duplicateCount ?? 1,
-              showReasoning: opts.showReasoning,
+              // Only render the reasoning/thinking block for the last message in
+              // the group so duplicate thinking blocks are not shown when a group
+              // contains multiple assistant messages with the same thinking content.
+              showReasoning: opts.showReasoning && index === group.messages.length - 1,
               showToolCalls: opts.showToolCalls ?? true,
               autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
               isToolMessageExpanded: opts.isToolMessageExpanded,
